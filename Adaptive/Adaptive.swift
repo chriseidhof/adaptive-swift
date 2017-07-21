@@ -192,7 +192,7 @@ extension Adaptive {
         return new { mapH(list, destination: $0) }
     }
     
-    func reduce<A, Result>(_ list: Node<AList<A>>, initial: (Result), _ transform: @escaping (Result, A) -> Result) -> Node<Result> where Result: Equatable {
+    func reduce2<A, Result>(compare: @escaping (Result, Result) -> Bool, _ list: Node<AList<A>>, _ initial: (Result), _ transform: @escaping (Result, A) -> Result) -> Node<Result> {
         func reduceH(_ list: Node<AList<A>>, intermediate: Result, destination: Node<Result>) {
             list.read {
                 switch $0 {
@@ -203,6 +203,120 @@ extension Adaptive {
                 }
             }
         }
-        return new { reduceH(list, intermediate: initial, destination: $0) }
+        return new(compare: compare) { reduceH(list, intermediate: initial, destination: $0) }
+    }
+    
+    func reduce<A, Result>(_ list: Node<AList<A>>, initial: (Result), _ transform: @escaping (Result, A) -> Result) -> Node<Result> where Result: Equatable {
+        return reduce2(compare: ==, list, initial, transform)
+    }
+    
+    func map<A,B>(node: Node<A>, f: @escaping (A) -> B) -> Node<B> where B: Equatable {
+        return new { newNode in
+            node.read {
+                newNode.write(f($0))
+            }
+        }
+    }
+    
+    func array<Element: Equatable>(initial: [Element]) -> (Node<AdaptiveArray<Element>>, (Array<Element>.Change) -> ()) {
+        typealias C = Array<Element>.Change
+        typealias Changelist = Node<AList<C>>
+        var (changes, tail): (Changelist, Changelist) = fromSequence([])
+        let node: Node<AdaptiveArray<Element>> = reduce(changes, initial: .initial(initial), { (acc: AdaptiveArray<Element>, change: C) in
+            var copy: [Element] = acc.latest
+            copy.apply(change: change)
+            return .changed(previous: acc, change: change, latest: copy)
+        })
+        return (node, { change in
+            let newTail: Changelist = self.new(value: .empty)
+            tail.write(.cons(change, newTail))
+            tail = newTail
+        })
+    }
+    
+//    func array<Element: Equatable>(initial: [Element]) -> Node<AdaptiveArray<Element>> {
+//        let list: AdaptiveArray<Element>.Changelist = new(value: .empty)
+//        return new(value: AdaptiveArray(initial: initial, changes: list, tail: list))
+//    }
+    
+//    func mutate<Element>(_ array: Node<AdaptiveArray<Element>>, change: Array<Element>.Change) -> Node<AdaptiveArray<Element>> {
+//        return self.new(transform: { destination in
+//            array.read { a in
+//                var new = a
+//                let newTail: AdaptiveArray<Element>.Changelist = self.new(value: .empty)
+//                new.tail.write(.cons(change, newTail))
+//                new.tail = newTail
+//                destination.write(new)
+//            }
+//        })
+//    }
+//
+//    func
+}
+
+indirect enum AdaptiveArray<Element>: Equatable where Element: Equatable {
+    case initial([Element])
+    case changed(previous: AdaptiveArray, change: Array<Element>.Change, latest: [Element])
+    
+    var latest: [Element] {
+        switch self {
+        case .initial(let els): return els
+        case .changed(_, change: _, latest: let els): return els
+        }
+    }
+    
+    var changes: [Array<Element>.Change] {
+        var result: [Array<Element>.Change] = []
+        var current = self
+        while case let .changed(prev, change, _) = current {
+            result.append(change)
+            current = prev
+        }
+        return Array(result.reversed())
+    }
+    
+    static func ==(lhs: AdaptiveArray, rhs: AdaptiveArray) -> Bool {
+        if case let .initial(x) = lhs, case let .initial(y) = rhs, x == y { return true }
+        return false // todo
     }
 }
+extension Array where Element: Equatable {
+    enum Change: Equatable {
+        case insert(element: Element, at: Int)
+        case remove(elementAt: Int)
+        case append(Element)
+        
+        static func ==(lhs: Array<Element>.Change, rhs: Array<Element>.Change) -> Bool {
+            switch (lhs, rhs) {
+            case (.insert(let e1, let a1), .insert(let e2, let a2)):
+                return e1 == e2 && a1 == a2
+            case (.remove(let i1), .remove(let i2)):
+                return i1 == i2
+            case (.append(let e), .append(let e2)):
+                return e == e2
+            default:
+                return false
+            }
+        }
+
+    }
+
+    mutating func apply(change: Change) {
+        switch change {
+        case let .insert(element: e, at: i):
+            self.insert(e, at: i)
+        case .remove(elementAt: let i):
+            self.remove(at: i)
+        case .append(element: let i):
+            self.append(i)
+        }
+    }
+}
+
+//extension AdaptiveArray: Equatable {
+//    static func ==(lhs: AdaptiveArray<A>, rhs: AdaptiveArray<A>) -> Bool {
+//        return false
+//    }
+//
+//}
+
